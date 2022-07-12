@@ -2068,7 +2068,7 @@ T and p MUST be ndarrays
         return d
         
         
-    def _T(self,d,p,sat=False):
+    def _T(self,d,p,sat=False,strictlims=False):
         """Temperature iterator - calculate temperature from d,p (inner routine)
 d and p MUST be ndarrays
 
@@ -2077,9 +2077,14 @@ d and p MUST be ndarrays
 Unlike _p(), _T() DOES handle cases where d is "under the dome."  These
 calculations are relatively expensive, but they are necessary to the _T
 inversion process.  When sat is set to True, these intermediate 
-calculations are returned to prevent redundent saturation property calls
+calculations are returned to prevent redundant saturation property calls. By
+default, _T() uses limits of Tmin/Tmax on the temperature inversion. For
+certain supercritical conditions, this can result in _p() being called under
+the dome. When strictlims is set to True, these limits will be recomputed onto
+the dome. As this is expensive, strictlims should be avoided unless errors are
+encountered.
 
-    T,dsL,dsV,Isat = _T(d,p,sat=True)
+    T,dsL,dsV,Isat = _T(d,p,sat=True,strictlims=False)
     
 dsL and dsV are the saturation densities at p
 Isat is a boolean index array that is True at points where d is between
@@ -2115,6 +2120,31 @@ inverted to calculate T
         Itest = np.asarray(p>=self.data['pc'], dtype=bool)
         Ta[Itest] = self.data['Tlim'][0]
         Tb[Itest] = self.data['Tlim'][1]
+
+        if strictlims:
+            # Compute the temperature limits if d intersects the dome
+            Tmin = np.ones_like(Ta) * self.data['Tlim'][0]
+            Tcr = np.ones_like(Ta) * (self.data['Tc'] - 1e-10)  # derivatives bad at Tc
+            Isub = np.asarray(d >= self.data['dc'], dtype=bool) & np.asarray(d <= self._dsl(Tmin)[0]) & Itest
+            self._hybrid1(self._dsl,
+                          "T",
+                          d,
+                          Ta,
+                          Isub,
+                          Tmin,
+                          Tcr,
+                          Nmax=50)
+
+            Isub = np.asarray(d < self.data['dc'], dtype=bool) & np.asarray(d >= self._dsv(Tmin)[0]) & Itest
+            self._hybrid1(self._dsv,
+                          "T",
+                          d,
+                          Ta,
+                          Isub,
+                          Tmin,
+                          Tcr,
+                          Nmax=50)
+
         
         # For pressures that are sub-critical, detect whether the 
         # state is liquid or gaseous.  Set Itest to sub-critical.  
@@ -2155,17 +2185,23 @@ inverted to calculate T
             Ta[Isat] = self.data['Tlim'][0]
             # Eliminate these from the down-select array - no iteraiton required.
             I[Isat] = False
-        
-        self._hybrid1(
-                self._p,
-                'T',
-                p,
-                T,
-                I,
-                Ta,
-                Tb,
-                param={'d':d})
-        
+
+        try:
+            self._hybrid1(
+                    self._p,
+                    'T',
+                    p,
+                    T,
+                    I,
+                    Ta,
+                    Tb,
+                    param={'d':d})
+        except pm.utility.PMParamError as e:
+            if not strictlims:  # Retry with strict limits if we didn't already
+                return self._T(d, p, sat, strictlims=True)
+            else:  # this is not the error we're looking for, reraise it
+                raise
+
         if sat:
             return T, dsL, dsV, Isat
         return T
