@@ -1994,7 +1994,7 @@ sub-critical densities to be either purely liquid or vapor.
         return p,pt,pd
         
         
-    def _d(self,T,p,debug=False):
+    def _d(self,T,p,debug=False, strictlims=True):
         """Density iterator - calculate density from T,p (inner routine)
 T and p MUST be ndarrays
 """
@@ -2015,12 +2015,20 @@ T and p MUST be ndarrays
         # Separate out sub-critical and super-critical values for 
         # initial conditions.  For temperatures that are super-critical, 
         # use the extreme density limits of the data set.
-        Itest = T>=self.data['Tc']
+        Itest = np.array(T>=self.data['Tc'])
         #da[Itest] = self.data['dlim'][0]
         # Produce a minimum density from one tenth the ideal gas relationship
         da[Itest] = 0.1 * p[Itest] / (self.data['R'] * T[Itest])
         db[Itest] = self.data['dlim'][1]
         #d[Itest] = 0.5*(self.data['dlim'][0] + self.data['dlim'][1])
+
+        # Limit the maximum density for cases where the pressure is under the dome
+        Isub = np.array(p<=self.data['pc']) & Itest
+        db[Isub] = self.data['dc']
+        if strictlims:
+            Isub = np.array(p > self.data['pc']) & Itest
+            db[Isub] = self._d(T=np.array([self.data['Tc']]), p=np.array([self.data['plim'][1]]), strictlims=False)
+
         # For temperatures that are sub-critical, detect whether the 
         # state is liquid or gaseous.  Set Itest to sub-critical.  
         Itest = np.logical_not(Itest)
